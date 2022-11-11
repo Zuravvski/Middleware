@@ -535,6 +535,91 @@ namespace ProblemDetails.Tests
             await AssertIsProblemDetailsResponse(response, expectExceptionDetails: true);
         }
 
+        [Fact]
+        public async Task Exception_EnrichProblemDetails()
+        {
+            const string enrichedPropertyKey = "source";
+            const string source = "TestAssembly.Test";
+
+            using var client = CreateClient(
+                handler: ResponseThrows(new Exception(string.Empty)),
+                configureOptions: options =>
+                {
+                    options.Enrich<Exception>((exception, problemDetails) =>
+                    {
+                        problemDetails.Extensions[enrichedPropertyKey] = source;
+                    });
+                });
+
+            var response = await client.GetAsync(string.Empty);
+            var responseProblemDetails = await response.Content.ReadFromJsonAsync<MvcProblemDetails>();
+
+            Assert.Equal(source, responseProblemDetails.Extensions[enrichedPropertyKey].ToString());
+        }
+
+        [Theory]
+        [InlineData("enrichedParameter")]
+        [InlineData("omittedParameter")]
+        public async Task Exception_EnrichProblemDetails_Predicate(string predicateData)
+        {
+            const string enrichedPropertyKey = "source";
+            const string source = "TestAssembly.Test";
+            const string testExceptionData = "enrichedParameter";
+
+            using var client = CreateClient(
+                handler: ResponseThrows(new ArgumentException(string.Empty, predicateData)),
+                configureOptions: options =>
+                {
+                    options.Enrich<ArgumentException>(
+                        (exception, problemDetails) =>
+                        {
+                            problemDetails.Extensions[enrichedPropertyKey] = source;
+                        },
+                        (ctx, exception) => exception.ParamName == testExceptionData
+                    );
+                });
+
+            var response = await client.GetAsync(string.Empty);
+            var responseProblemDetails = await response.Content.ReadFromJsonAsync<MvcProblemDetails>();
+
+            if (predicateData == testExceptionData)
+            {
+                Assert.Equal(source, responseProblemDetails.Extensions[enrichedPropertyKey].ToString());
+            }
+            else
+            {
+                Assert.False(responseProblemDetails.Extensions.ContainsKey(enrichedPropertyKey));
+            }
+        }
+
+        [Theory]
+        [InlineData("enrichedParameter")]
+        [InlineData("omittedParameter")]
+        public async Task Exception_EnrichProblemDetails_StandaloneEnricher_Predicate(string predicateData)
+        {
+            const string testExceptionData = "enrichedParameter";
+            var enricher = new TestEnricher(testExceptionData);
+
+            using var client = CreateClient(
+                handler: ResponseThrows(new ArgumentException(string.Empty, predicateData)),
+                configureOptions: options =>
+                {
+                    options.AddEnricher(enricher);
+                });
+
+            var response = await client.GetAsync(string.Empty);
+            var responseProblemDetails = await response.Content.ReadFromJsonAsync<MvcProblemDetails>();
+
+            if (predicateData == testExceptionData)
+            {
+                Assert.Equal(testExceptionData, responseProblemDetails.Extensions[enricher.EnrichedPropertyName].ToString());
+            }
+            else
+            {
+                Assert.False(responseProblemDetails.Extensions.ContainsKey(enricher.EnrichedPropertyName));
+            }
+        }
+
         private static async Task AssertIsProblemDetailsResponse(HttpResponseMessage response, bool expectExceptionDetails)
         {
             Assert.Equal(ProblemJsonMediaType, response.Content.Headers.ContentType.MediaType);

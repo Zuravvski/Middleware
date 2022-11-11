@@ -136,6 +136,7 @@ namespace Hellang.Middleware.ProblemDetails
         public int ValidationProblemStatusCode { get; set; }
 
         private List<ExceptionMapper> Mappers { get; }
+        private List<ProblemDetailsEnricher> Enrichers { get; } = new();
 
         private List<Func<HttpContext, Exception, bool>> RethrowPolicies { get; }
 
@@ -225,6 +226,61 @@ namespace Hellang.Middleware.ProblemDetails
                 typeof(TException),
                 (ctx, ex) => mapping(ctx, (TException)ex),
                 (ctx, ex) => predicate(ctx, (TException)ex)));
+        }
+
+        public void Enrich(Action<Exception, MvcProblemDetails> enhancing)
+        {
+            Enrich<Exception>(enhancing);
+        }
+
+        public void Enrich(Action<HttpContext, Exception, MvcProblemDetails> enhancing)
+        {
+            Enrich<Exception>(enhancing);
+        }
+
+        public void Enrich<TException>(Action<TException, MvcProblemDetails> enhancing) where TException : Exception
+        {
+            Enrich<TException>((_, ex, problem) => enhancing(ex, problem));
+        }
+
+
+        public void Enrich<TException>(Action<HttpContext, TException, MvcProblemDetails> enhancing) where TException : Exception
+        {
+            Enrich(enhancing, (_, _) => true);
+        }
+
+        public void Enrich<TException>(Action<TException, MvcProblemDetails> enhancing,
+                                       Func<HttpContext, TException, bool> predicate)
+            where TException : Exception
+        {
+            Enrich((_, ex, problem) => enhancing(ex, problem), predicate);
+        }
+
+        public void Enrich(Action<HttpContext, Exception, MvcProblemDetails> enhancing,
+                           Func<HttpContext, Exception, bool> predicate)
+        {
+            Enrich<Exception>(enhancing, predicate);
+        }
+
+        public void Enrich<TException>(Action<HttpContext, TException, MvcProblemDetails> enhancing,
+                                       Func<HttpContext, TException, bool> predicate)
+            where TException : Exception
+        {
+            Enrichers.Add(new ProblemDetailsEnricher(
+                typeof(TException),
+                (ctx, ex, problem) => enhancing(ctx, (TException)ex, problem),
+                (ctx, ex) => predicate(ctx, (TException)ex)
+            ));
+        }
+
+        public void AddEnricher<TException>(IProblemDetailsEnricher<TException> enricher)
+            where TException : Exception
+        {
+            Enrichers.Add(new ProblemDetailsEnricher(
+                typeof(TException),
+                (ctx, ex, problem) => enricher.Enrich(ctx, (TException)ex, problem),
+                (ctx, ex) => enricher.ShouldEnrich(ctx, (TException)ex)
+            ));
         }
 
         /// <summary>
@@ -327,6 +383,19 @@ namespace Hellang.Middleware.ProblemDetails
             return false;
         }
 
+        internal void EnrichProblemDetails(HttpContext context, Exception? exception, MvcProblemDetails? problem)
+        {
+            if (problem is null || exception is null)
+            {
+                return;
+            }
+
+            foreach (var enricher in Enrichers)
+            {
+                enricher.Enrich(context, exception, problem);
+            }
+        }
+
         private sealed class ExceptionMapper
         {
             public ExceptionMapper(Type type, Func<HttpContext, Exception, MvcProblemDetails?> mapping, Func<HttpContext, Exception, bool> predicate)
@@ -365,6 +434,35 @@ namespace Hellang.Middleware.ProblemDetails
 
                 problem = default;
                 return false;
+            }
+        }
+
+        private sealed class ProblemDetailsEnricher
+        {
+            private Type Type { get; }
+            private Action<HttpContext, Exception, MvcProblemDetails> Enriching { get; }
+            private Func<HttpContext, Exception, bool> Predicate { get; }
+
+            public ProblemDetailsEnricher(Type type,
+                                          Action<HttpContext, Exception, MvcProblemDetails> enriching,
+                                          Func<HttpContext, Exception, bool> predicate)
+            {
+                Type = type ?? throw new ArgumentNullException(nameof(type));
+                Enriching = enriching ?? throw new ArgumentNullException(nameof(enriching));
+                Predicate = predicate ?? throw new ArgumentNullException(nameof(predicate));
+            }
+
+            public bool ShouldEnrich(HttpContext context, Exception exception)
+            {
+                return Type.IsInstanceOfType(exception) && Predicate(context, exception);
+            }
+
+            public void Enrich(HttpContext context, Exception exception, MvcProblemDetails problem)
+            {
+                if (ShouldEnrich(context, exception))
+                {
+                    Enriching(context, exception, problem);
+                }
             }
         }
     }

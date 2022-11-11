@@ -43,6 +43,7 @@ namespace Hellang.Middleware.ProblemDetails
                 if (problem.InnerException is null)
                 {
                     // The user has already provided a valid problem details object.
+                    Options.EnrichProblemDetails(context, error, problem.Details);
                     return problem.Details;
                 }
 
@@ -59,6 +60,8 @@ namespace Hellang.Middleware.ProblemDetails
                     // Developer has explicitly ignored the problem.
                     return null;
                 }
+
+                Options.EnrichProblemDetails(context, error, result);
             }
 
             if (Options.IncludeExceptionDetails(context, error))
